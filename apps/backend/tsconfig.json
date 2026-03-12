@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    // 启用严格模式检查
+    "strict": false, // 暂时关闭完全严格模式，逐步启用
+    "strictNullChecks": true, // 启用空值检查
+    "noImplicitAny": true, // 禁止隐式 any
+    "strictBindCallApply": true, // 严格的 bind/call/apply 检查
+    "strictFunctionTypes": true, // 严格的函数类型检查
+    "strictPropertyInitialization": false, // 暂时关闭属性初始化检查（NestJS 装饰器需要）
+    "noImplicitThis": true, // 禁止隐式 this
+    "alwaysStrict": true, // 始终使用严格模式
+    "forceConsistentCasingInFileNames": true, // 强制文件名大小写一致
+    "noFallthroughCasesInSwitch": true, // 禁止 switch 穿透
+    "noUnusedLocals": false, // 暂时关闭未使用变量检查
+    "noUnusedParameters": false, // 暂时关闭未使用参数检查
+    "noImplicitReturns": true, // 函数必须有返回值
+    "paths": {
+      "@/*": ["src/*"],
+      "~/*": ["./*"]
+    }
+  }
+}

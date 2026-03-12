@@ -1,0 +1,8 @@
+{
+  "name": "@vben/crawler",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"const p=require('path'),{execSync}=require('child_process');const py=process.platform==='win32'?p.join('venv','Scripts','python'):p.join('venv','bin','python');execSync(py+' run.py',{stdio:'inherit'})\""
+  }
+}

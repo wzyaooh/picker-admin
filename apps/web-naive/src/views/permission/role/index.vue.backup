@@ -1,0 +1,1471 @@
+<script lang="ts" setup>
+import type { DataTableColumns } from 'naive-ui';
+
+import { computed, h, onMounted, ref, watch } from 'vue';
+
+import {
+  NBadge,
+  NButton,
+  NCard,
+  NCheckbox,
+  NDataTable,
+  NInput,
+  NScrollbar,
+  NTabPane,
+  NTabs,
+  NTag,
+} from 'naive-ui';
+
+import { dialog, message } from '#/adapter/naive';
+
+import { useWindowSize } from '@vueuse/core';
+
+import {
+  addRolePermissionsApi,
+  addRoleUsersApi,
+  createRoleApi,
+  deleteRoleApi,
+  getRolePageApi,
+  getRolePermissionsApi,
+  getRolePermissionsTreeApi,
+  getRoleUsersApi,
+  removeRoleUsersApi,
+  updateRoleApi,
+  type RoleApi,
+} from '#/api';
+
+import { getUserListApi } from '#/api/core/user';
+
+import ApplyModal from './applyModal.vue';
+
+defineOptions({ name: 'PermissionRolePage' });
+
+console.log('PermissionRolePage component script loaded');
+
+type RoleRecord = {
+  code: string;
+  description?: string;
+  enabled: boolean;
+  id: number;
+  name: string;
+};
+
+type PermissionItem = {
+  key: string;
+  label: string;
+  id?: number;  // 按钮权限的实际ID
+};
+
+type PermissionNode = {
+  children?: PermissionNode[];
+  id: number;
+  name: string;
+  type?: string;  // MODULE, DIRECTORY, MENU, BUTTON
+  perms?: PermissionItem[];
+};
+
+function flattenTree(nodes: PermissionNode[]): PermissionNode[] {
+  const result: PermissionNode[] = [];
+  const walk = (list: PermissionNode[]) => {
+    list.forEach((n) => {
+      result.push(n);
+      if (n.children?.length) {
+        walk(n.children);
+      }
+    });
+  };
+  walk(nodes);
+  return result;
+}
+
+const roleKeyword = ref('');
+const roles = ref<RoleRecord[]>([]);
+const loading = ref(false);
+const page = ref(1);
+const pageSize = ref(100); // Load all roles for now
+
+// Fetch roles from backend
+async function fetchRoles() {
+  loading.value = true;
+  try {
+    console.log('Fetching roles with params:', {
+      page: page.value,
+      pageSize: pageSize.value,
+      name: roleKeyword.value || undefined,
+    });
+    
+    const result = await getRolePageApi({
+      page: page.value,
+      pageSize: pageSize.value,
+      name: roleKeyword.value || undefined,
+    });
+    
+    console.log('Roles API response:', result);
+    
+    // 后端返回的字段是 pageData，不是 items
+    const items = result.pageData || [];
+    roles.value = items.map(item => ({
+      id: item.id,
+      name: item.name,
+      code: item.code,
+      enabled: item.enabled,
+      description: item.description,
+    }));
+    
+    console.log('Mapped roles:', roles.value);
+  } catch (error) {
+    console.error('Failed to fetch roles:', error);
+    message.error('加载角色列表失败');
+  } finally {
+    loading.value = false;
+  }
+}
+
+// Load roles on mount
+onMounted(() => {
+  console.log('Role page mounted, fetching roles...');
+  fetchRoles();
+});
+
+const filteredRoles = computed(() => {
+  const k = roleKeyword.value.trim().toLowerCase();
+  if (!k) return roles.value;
+  return roles.value.filter(
+    (r) => r.name.toLowerCase().includes(k) || r.code.toLowerCase().includes(k),
+  );
+});
+
+const activeRoleId = ref<number | null>(null);
+const activeRole = computed(
+  () => roles.value.find((r) => r.id === activeRoleId.value) ?? null,
+);
+
+watch(
+  () => filteredRoles.value.map((r) => r.id).join(','),
+  () => {
+    if (!filteredRoles.value.some((r) => r.id === activeRoleId.value)) {
+      activeRoleId.value = filteredRoles.value[0]?.id ?? null;
+    }
+  },
+);
+
+// Watch for roles changes to set initial active role
+watch(
+  () => roles.value.length,
+  () => {
+    if (roles.value.length > 0 && !activeRoleId.value) {
+      activeRoleId.value = roles.value[0]?.id ?? null;
+    }
+  },
+  { immediate: true }
+);
+
+const modalOpen = ref(false);
+const modalMode = ref<'create' | 'edit'>('create');
+const modalInitialValues = ref<{
+  code?: string;
+  description?: string;
+  enabled?: boolean;
+  name?: string;
+}>({});
+const originalCode = ref<string | undefined>(undefined);
+const editingId = ref<number | null>(null);
+
+const existingCodes = computed(() => roles.value.map((r) => r.code));
+
+function openCreateRole() {
+  modalMode.value = 'create';
+  editingId.value = null;
+  originalCode.value = undefined;
+  modalInitialValues.value = {
+    name: '',
+    code: '',
+    enabled: true,
+    description: '',
+  };
+  modalOpen.value = true;
+}
+
+function openEditRole(role: RoleRecord) {
+  modalMode.value = 'edit';
+  editingId.value = role.id;
+  originalCode.value = role.code;
+  modalInitialValues.value = {
+    name: role.name,
+    code: role.code,
+    enabled: role.enabled,
+    description: role.description ?? '',
+  };
+  modalOpen.value = true;
+}
+
+function deleteRole(role: RoleRecord) {
+  dialog.warning({
+    title: '确认删除',
+    content: `确定删除角色「${role.name}」吗？`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await deleteRoleApi(role.id);
+        message.success('删除成功');
+        await fetchRoles();
+        
+        // Clear related data
+        roleUsersMap.value.delete(role.id);
+        originalRoleUsersMap.value.delete(role.id);
+        rolePermMap.value.delete(role.id);
+        originalRolePermMap.value.delete(role.id);
+
+        if (activeRoleId.value === role.id) {
+          activeRoleId.value = roles.value[0]?.id ?? null;
+        }
+      } catch (error) {
+        // Error already handled by interceptor
+      }
+    },
+  });
+}
+
+async function handleRoleSubmit(values: {
+  code: string;
+  description: string;
+  enabled: boolean;
+  name: string;
+}) {
+  try {
+    if (modalMode.value === 'create') {
+      await createRoleApi({
+        name: values.name,
+        code: values.code,
+        enabled: values.enabled,
+        description: values.description,
+      });
+      message.success('新增成功');
+    } else {
+      const id = editingId.value;
+      if (!id) return;
+      await updateRoleApi(id, {
+        name: values.name,
+        code: values.code,
+        enabled: values.enabled,
+        description: values.description,
+      });
+      message.success('保存成功');
+    }
+    
+    modalOpen.value = false;
+    await fetchRoles();
+  } catch (error) {
+    // Error already handled by interceptor
+  }
+}
+
+const permissionTree = ref<PermissionNode[]>([]);
+
+// Fetch permission tree from backend
+async function fetchPermissionTree() {
+  try {
+    const result = await getRolePermissionsTreeApi();
+    // Transform backend data to match UI structure
+    permissionTree.value = transformPermissionTree(result);
+  } catch (error) {
+    console.error('Failed to fetch permission tree:', error);
+  }
+}
+
+// Transform backend permission tree to UI format
+function transformPermissionTree(nodes: RoleApi.PermissionTreeNode[]): PermissionNode[] {
+  return nodes.map(node => {
+    const transformed: PermissionNode = {
+      id: node.id,
+      name: node.name,
+      type: node.type,  // 保留类型信息：MODULE, DIRECTORY, MENU, BUTTON
+    };
+    
+    // 如果有子节点，递归处理
+    if (node.children && node.children.length > 0) {
+      // 分离按钮权限和其他子节点
+      const buttons = node.children.filter(child => child.type === 'BUTTON');
+      const otherChildren = node.children.filter(child => child.type !== 'BUTTON');
+      
+      // 如果是菜单节点且有按钮权限，将按钮转换为 perms
+      if (node.type === 'MENU' && buttons.length > 0) {
+        transformed.perms = buttons.map(btn => ({
+          key: btn.code || btn.id.toString(),
+          label: btn.name,
+          id: btn.id,  // 保存按钮的实际ID
+        }));
+      }
+      
+      // 递归处理其他子节点
+      if (otherChildren.length > 0) {
+        transformed.children = transformPermissionTree(otherChildren);
+      }
+    }
+    
+    return transformed;
+  });
+}
+
+// Load permission tree on mount
+onMounted(() => {
+  fetchPermissionTree();
+});
+
+type RolePermMap = Map<number, Set<number>>;
+
+const rolePermMap = ref<RolePermMap>(new Map());
+const originalRolePermMap = ref<RolePermMap>(new Map()); // 存储原始权限数据，用于比较变化
+const permissionRefreshKey = ref(0); // 用于强制刷新权限显示
+
+// Load role permissions when active role changes
+watch(activeRoleId, async (newRoleId) => {
+  console.log('Active role changed to:', newRoleId);
+  if (newRoleId) {
+    try {
+      console.log('Fetching permissions for role:', newRoleId);
+      const permissions = await getRolePermissionsApi(newRoleId);
+      console.log('Role permissions response:', permissions);
+      console.log('Permission IDs type:', typeof permissions, Array.isArray(permissions));
+      
+      // 后端返回的是权限对象数组，需要提取 id
+      const permissionIds = Array.isArray(permissions) 
+        ? permissions.map((p: any) => p.id).filter((id: any) => id != null)
+        : [];
+      
+      console.log('Extracted permission IDs:', permissionIds);
+      console.log('First few permission IDs:', permissionIds.slice(0, 5));
+      
+      rolePermMap.value.set(newRoleId, new Set(permissionIds));
+      originalRolePermMap.value.set(newRoleId, new Set(permissionIds)); // 保存原始数据的副本
+      console.log('Permission Set:', rolePermMap.value.get(newRoleId));
+      // 强制刷新权限显示
+      permissionRefreshKey.value++;
+    } catch (error) {
+      console.error('Failed to fetch role permissions:', error);
+    }
+  }
+}, { immediate: true });
+
+function getRolePermSet(roleId: number) {
+  if (!rolePermMap.value.has(roleId)) {
+    rolePermMap.value.set(roleId, new Set());
+  }
+  return rolePermMap.value.get(roleId)!;
+}
+
+const treeIndex = computed(() => {
+  const nodeById = new Map<number, PermissionNode>();
+  const parentById = new Map<number, number | null>();
+  const childrenById = new Map<number, number[]>();
+  const permKeysById = new Map<number, string[]>();
+
+  const walk = (nodes: PermissionNode[], parent: number | null) => {
+    nodes.forEach((n) => {
+      nodeById.set(n.id, n);
+      parentById.set(n.id, parent);
+      permKeysById.set(
+        n.id,
+        n.perms?.map((p) => p.key) ?? [],
+      );
+      const childIds = n.children?.map((c) => c.id) ?? [];
+      childrenById.set(n.id, childIds);
+      if (n.children?.length) {
+        walk(n.children, n.id);
+      }
+    });
+  };
+
+  walk(permissionTree.value, null);
+
+  const descendantsById = new Map<number, number[]>();
+  const getDescendants = (id: number): number[] => {
+    if (descendantsById.has(id)) {
+      return descendantsById.get(id)!;
+    }
+    const result = [id];
+    const children = childrenById.get(id) ?? [];
+    children.forEach((cid) => result.push(...getDescendants(cid)));
+    descendantsById.set(id, result);
+    return result;
+  };
+
+  nodeById.forEach((_v, id) => {
+    getDescendants(id);
+  });
+
+  return { nodeById, parentById, childrenById, permKeysById, descendantsById };
+});
+
+function getNodeState(roleId: number, nodeId: number) {
+  // 依赖 permissionRefreshKey 来触发重新计算
+  void permissionRefreshKey.value;
+  const permSet = getRolePermSet(roleId);
+  const descendants = treeIndex.value.descendantsById.get(nodeId) ?? [nodeId];
+  
+  console.log('getNodeState called:', { 
+    roleId, 
+    nodeId, 
+    permSetSize: permSet.size, 
+    descendants,
+    permSetArray: Array.from(permSet).slice(0, 10),  // 显示前10个权限ID
+    descendantsArray: descendants.slice(0, 10)  // 显示前10个后代ID
+  });
+  
+  if (descendants.length === 0) {
+    return { checked: false, indeterminate: false };
+  }
+
+  const selected = descendants.reduce((acc, id) => {
+    const has = permSet.has(id);
+    if (has) {
+      console.log('  - Found matching permission:', id);
+    }
+    return acc + (has ? 1 : 0);
+  }, 0);
+  const checked = selected === descendants.length;
+  const indeterminate = selected > 0 && selected < descendants.length;
+  
+  console.log('getNodeState result:', { nodeId, selected, total: descendants.length, checked, indeterminate });
+  
+  return { checked, indeterminate };
+}
+
+function setNodeAllPermissions(roleId: number, nodeId: number, checked: boolean) {
+  const permSet = getRolePermSet(roleId);
+  const descendants = treeIndex.value.descendantsById.get(nodeId) ?? [nodeId];
+  const node = treeIndex.value.nodeById.get(nodeId);
+  
+  console.log('setNodeAllPermissions called:', {
+    roleId,
+    nodeId,
+    nodeName: node?.name,
+    checked,
+    descendants,
+    permSetSizeBefore: permSet.size,
+  });
+  
+  if (checked) {
+    descendants.forEach((id) => permSet.add(id));
+  } else {
+    descendants.forEach((id) => {
+      const descendantNode = treeIndex.value.nodeById.get(id);
+      console.log(`  Deleting permission ID: ${id} (${descendantNode?.name})`);
+      permSet.delete(id);
+    });
+  }
+  
+  console.log('setNodeAllPermissions after:', {
+    permSetSizeAfter: permSet.size,
+    permSetArray: Array.from(permSet),
+  });
+  
+  // 强制刷新显示和按钮状态
+  permissionRefreshKey.value++;
+}
+
+function isPermChecked(roleId: number, nodeId: number, _permKey: string) {
+  // 依赖 permissionRefreshKey 来触发重新计算
+  void permissionRefreshKey.value;
+  const permSet = getRolePermSet(roleId);
+  const checked = permSet.has(nodeId);
+  
+  console.log('isPermChecked:', { 
+    roleId, 
+    nodeId, 
+    _permKey, 
+    checked,
+    permSetSize: permSet.size 
+  });
+  
+  return checked;
+}
+
+function setPermission(roleId: number, nodeId: number, _permKey: string, checked: boolean) {
+  const permSet = getRolePermSet(roleId);
+  
+  // 只操作当前节点，不影响子节点
+  if (checked) {
+    permSet.add(nodeId);
+  } else {
+    permSet.delete(nodeId);
+  }
+  
+  // 强制刷新显示
+  permissionRefreshKey.value++;
+}
+
+const expandedRowKeys = ref<number[]>([]);
+const allNodeIds = computed(() => flattenTree(permissionTree.value).map(n => n.id));
+const allExpanded = computed(() => expandedRowKeys.value.length >= allNodeIds.value.length);
+
+function expandAll() {
+  expandedRowKeys.value = allNodeIds.value;
+}
+
+function collapseAll() {
+  expandedRowKeys.value = [];
+}
+
+async function refreshPermission() {
+  try {
+    // 刷新权限树
+    await fetchPermissionTree();
+    
+    // 重新加载当前角色的权限
+    if (activeRoleId.value) {
+      const permissions = await getRolePermissionsApi(activeRoleId.value);
+      const permissionIds = Array.isArray(permissions) 
+        ? permissions.map((p: any) => p.id).filter((id: any) => id != null)
+        : [];
+      
+      rolePermMap.value.set(activeRoleId.value, new Set(permissionIds));
+      originalRolePermMap.value.set(activeRoleId.value, new Set(permissionIds));
+      
+      // 强制刷新显示
+      permissionRefreshKey.value++;
+    }
+    
+    message.success('刷新成功');
+  } catch (error) {
+    console.error('Failed to refresh permissions:', error);
+    message.error('刷新失败');
+  }
+}
+
+async function savePermission() {
+  if (!activeRole.value || !activeRoleId.value) {
+    return;
+  }
+  
+  try {
+    const permissionIds = Array.from(getRolePermSet(activeRoleId.value));
+    
+    console.log('=== Save Permission ===');
+    console.log('Role ID:', activeRoleId.value);
+    console.log('Permission IDs to save:', permissionIds);
+    console.log('Permission count:', permissionIds.length);
+    
+    await addRolePermissionsApi({
+      id: activeRoleId.value,  // 后端期望的字段名是 id，不是 roleId
+      permissionIds,
+    });
+    
+    console.log('Save API call successful');
+    
+    // 等待一小段时间，确保后端保存完成
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // 重新加载当前角色的权限
+    const permissions = await getRolePermissionsApi(activeRoleId.value);
+    console.log('Reloaded permissions from backend:', permissions);
+    
+    const newPermissionIds = Array.isArray(permissions) 
+      ? permissions.map((p: any) => p.id).filter((id: any) => id != null)
+      : [];
+    
+    console.log('Extracted permission IDs:', newPermissionIds);
+    console.log('Reloaded permission count:', newPermissionIds.length);
+    
+    // 更新当前权限和原始权限
+    rolePermMap.value.set(activeRoleId.value, new Set(newPermissionIds));
+    originalRolePermMap.value.set(activeRoleId.value, new Set(newPermissionIds));
+    
+    // 强制刷新显示
+    permissionRefreshKey.value++;
+    
+    message.success(`已保存「${activeRole.value.name}」权限`);
+  } catch (error) {
+    console.error('Save permission error:', error);
+    // Error already handled by interceptor
+  }
+}
+
+// 检测权限是否有变化
+const hasPermissionChanges = computed(() => {
+  // 依赖 permissionRefreshKey 来触发重新计算
+  void permissionRefreshKey.value;
+  
+  if (!activeRoleId.value) return false;
+  
+  const originalPermSet = originalRolePermMap.value.get(activeRoleId.value);
+  const currentPermSet = rolePermMap.value.get(activeRoleId.value);
+  
+  if (!originalPermSet || !currentPermSet) return false;
+  
+  // 检查大小是否相同
+  if (originalPermSet.size !== currentPermSet.size) {
+    return true;
+  }
+  
+  // 检查内容是否相同
+  for (const id of currentPermSet) {
+    if (!originalPermSet.has(id)) {
+      return true;
+    }
+  }
+  
+  return false;
+});
+
+const permissionColumns = computed((): DataTableColumns<PermissionNode> => {
+  return [
+    {
+      title: '',
+      key: 'node-check',
+      width: 48,
+      fixed: 'left',
+      align: 'center',
+      className: 'perm-node-check-cell',
+      render: (row) => {
+        const rid = activeRoleId.value;
+        const nodeState = rid ? getNodeState(rid, row.id) : { checked: false, indeterminate: false };
+        return h('div', { class: 'flex items-center justify-center' }, [
+          h(NCheckbox, {
+            checked: nodeState.checked,
+            indeterminate: nodeState.indeterminate,
+            onUpdateChecked: (val: boolean) => {
+              if (!rid) return;
+              setNodeAllPermissions(rid, row.id, val);
+            },
+          }),
+        ]);
+      },
+    },
+    {
+      title: '菜单',
+      key: 'name',
+      width: 200,
+      fixed: 'left',
+      tree: true,
+      className: 'perm-menu-cell',
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => {
+        // 根据类型确定标签和颜色
+        let tagType: 'default' | 'info' | 'success' | 'warning' = 'default';
+        let tagText = '目录';
+        
+        if (row.type === 'MODULE') {
+          tagType = 'warning';
+          tagText = '模块';
+        } else if (row.type === 'DIRECTORY') {
+          tagType = 'default';
+          tagText = '目录';
+        } else if (row.type === 'MENU') {
+          tagType = 'info';
+          tagText = '菜单';
+        } else if (row.type === 'BUTTON') {
+          tagType = 'success';
+          tagText = '按钮';
+        } else if (row.children?.length) {
+          tagType = 'default';
+          tagText = '目录';
+        } else {
+          tagType = 'info';
+          tagText = '菜单';
+        }
+        
+        return h('div', { class: 'flex h-full min-w-0 items-center gap-2 whitespace-nowrap' }, [
+          h(
+            NTag,
+            {
+              size: 'small',
+              type: tagType,
+              bordered: false,
+            },
+            { default: () => tagText },
+          ),
+          h(
+            'span',
+            { class: 'min-w-0 flex-1 truncate font-medium', title: row.name },
+            row.name,
+          ),
+        ]);
+      },
+    },
+    {
+      title: '权限',
+      key: 'perms',
+      minWidth: 720,
+      render: (row) => {
+        const roleId = activeRoleId.value;
+
+        if (!row.perms?.length) {
+          return h('span', { class: 'text-muted-foreground' }, '');
+        }
+
+        return h(
+          'div',
+          { class: 'flex flex-wrap gap-3' },
+          row.perms!.map((p) => {
+            // 使用按钮的实际ID，如果没有则使用菜单ID
+            const permId = p.id || row.id;
+            return h(
+              NCheckbox,
+              {
+                checked: roleId ? isPermChecked(roleId, permId, p.key) : false,
+                onUpdateChecked: (val: boolean) => {
+                  if (!roleId) return;
+                  setPermission(roleId, permId, p.key, val);
+                },
+              },
+              { default: () => p.label },
+            );
+          }),
+        );
+      },
+    },
+  ];
+});
+
+type User = {
+  id: number;
+  username: string;
+  realName?: string;
+  email?: string;
+  enabled: boolean;
+};
+
+// 用户列表和加载状态
+const users = ref<User[]>([]);
+const usersLoading = ref(false);
+
+// 获取用户列表
+async function fetchUsers() {
+  usersLoading.value = true;
+  try {
+    const result = await getUserListApi({
+      pageNo: 1,
+      pageSize: 1000, // 获取所有用户
+    });
+    
+    // 后端返回的字段是 pageData，不是 items
+    const items = result.pageData || [];
+    users.value = items.map(item => ({
+      id: item.id,
+      username: item.username,
+      realName: (item as any).realName,  // profile 字段被展平了
+      email: (item as any).email,
+      enabled: item.enabled ?? true,  // 如果 enabled 为 undefined，默认为 true
+    }));
+  } catch (error) {
+    console.error('Failed to fetch users:', error);
+    message.error('加载用户列表失败');
+  } finally {
+    usersLoading.value = false;
+  }
+}
+
+// 加载用户列表
+onMounted(() => {
+  fetchUsers();
+});
+
+const roleUsersMap = ref(new Map<number, number[]>());
+const originalRoleUsersMap = ref(new Map<number, number[]>()); // 存储原始数据，用于比较变化
+const roleUsersRefreshKey = ref(0); // 用于强制刷新用户列表显示
+
+// Load role users when active role changes
+watch(activeRoleId, async (newRoleId) => {
+  if (newRoleId) {
+    try {
+      console.log('Loading users for role:', newRoleId);
+      const role = await getRoleUsersApi(newRoleId);
+      
+      // 提取用户ID列表
+      const userIds = role.users?.map((u: any) => u.id) || [];
+      roleUsersMap.value.set(newRoleId, userIds);
+      originalRoleUsersMap.value.set(newRoleId, [...userIds]); // 保存原始数据的副本
+      
+      // 强制刷新显示
+      roleUsersRefreshKey.value++;
+      
+      console.log('Role users loaded:', userIds);
+    } catch (error) {
+      console.error('Failed to load role users:', error);
+      // 如果加载失败，初始化为空数组
+      roleUsersMap.value.set(newRoleId, []);
+      originalRoleUsersMap.value.set(newRoleId, []);
+      roleUsersRefreshKey.value++;
+    }
+  }
+});
+
+const selectedUserKeys = computed({
+  get() {
+    // 依赖 roleUsersRefreshKey 来触发重新计算
+    void roleUsersRefreshKey.value;
+    const rid = activeRoleId.value;
+    if (!rid) return [];
+    return roleUsersMap.value.get(rid) ?? [];
+  },
+  set(val: number[]) {
+    const rid = activeRoleId.value;
+    if (!rid) return;
+    roleUsersMap.value.set(rid, val);
+    // 强制刷新显示
+    roleUsersRefreshKey.value++;
+  },
+});
+
+const allUsersKeywordDraft = ref('');
+const allUsersKeyword = ref('');
+const allUsersPage = ref(1);
+const allUsersPageSize = ref(10);
+const authedUsersPage = ref(1);
+const authedUsersPageSize = ref(10);
+
+const filteredAllUsers = computed(() => {
+  const kw = allUsersKeyword.value.trim().toLowerCase();
+  if (!kw) return users.value;
+  return users.value.filter((u) => {
+    return (
+      u.username.toLowerCase().includes(kw) ||
+      (u.realName && u.realName.toLowerCase().includes(kw)) ||
+      (u.email && u.email.toLowerCase().includes(kw))
+    );
+  });
+});
+
+const allUsersPaged = computed(() => {
+  const start = (allUsersPage.value - 1) * allUsersPageSize.value;
+  return filteredAllUsers.value.slice(start, start + allUsersPageSize.value);
+});
+
+const authedUsers = computed(() => {
+  const set = new Set(selectedUserKeys.value);
+  return users.value.filter((u) => set.has(u.id));
+});
+
+const authedUsersPaged = computed(() => {
+  const start = (authedUsersPage.value - 1) * authedUsersPageSize.value;
+  return authedUsers.value.slice(start, start + authedUsersPageSize.value);
+});
+
+const allUsersPagination = computed(() => ({
+  page: allUsersPage.value,
+  pageSize: allUsersPageSize.value,
+  itemCount: filteredAllUsers.value.length,
+  pageSizes: [10, 20, 50],
+  showSizePicker: true,
+  onUpdatePage: (p: number) => {
+    allUsersPage.value = p;
+  },
+  onUpdatePageSize: (ps: number) => {
+    allUsersPageSize.value = ps;
+    allUsersPage.value = 1;
+  },
+}));
+
+const authedUsersPagination = computed(() => ({
+  page: authedUsersPage.value,
+  pageSize: authedUsersPageSize.value,
+  itemCount: authedUsers.value.length,
+  pageSizes: [10, 20, 50],
+  showSizePicker: true,
+  onUpdatePage: (p: number) => {
+    authedUsersPage.value = p;
+  },
+  onUpdatePageSize: (ps: number) => {
+    authedUsersPageSize.value = ps;
+    authedUsersPage.value = 1;
+  },
+}));
+
+function isUserAuthed(userId: number) {
+  return selectedUserKeys.value.includes(userId);
+}
+
+function addUserToRole(userId: number) {
+  const rid = activeRoleId.value;
+  if (!rid) return;
+  if (isUserAuthed(userId)) return;
+  
+  // 只修改本地状态，不调用接口
+  selectedUserKeys.value = [...selectedUserKeys.value, userId];
+}
+
+async function removeUserFromRole(userId: number) {
+  const rid = activeRoleId.value;
+  if (!rid) return;
+  if (!isUserAuthed(userId)) return;
+  
+  console.log('Removing user from role (local only):', { userId, roleId: rid });
+  
+  // 只修改本地状态，不调用接口
+  selectedUserKeys.value = selectedUserKeys.value.filter((id) => id !== userId);
+}
+
+function queryAllUsers() {
+  allUsersKeyword.value = allUsersKeywordDraft.value;
+  allUsersPage.value = 1;
+}
+
+function resetAllUsersQuery() {
+  allUsersKeywordDraft.value = '';
+  allUsersKeyword.value = '';
+  allUsersPage.value = 1;
+}
+
+const allUsersColumns = computed((): DataTableColumns<User> => {
+  // 依赖 roleUsersRefreshKey 来触发重新计算
+  void roleUsersRefreshKey.value;
+  
+  return [
+    {
+      title: '',
+      key: 'action',
+      width: 60,
+      align: 'center',
+      fixed: 'left',
+      render: (row) => {
+        const disabled = !activeRoleId.value || isUserAuthed(row.id) || !row.enabled;
+        return h(
+          NButton,
+          {
+            size: 'small',
+            dashed: true,
+            disabled,
+            onClick: () => addUserToRole(row.id),
+          },
+          { default: () => '+' },
+        );
+      },
+    },
+    {
+      title: '',
+      key: 'avatar',
+      width: 56,
+      align: 'center',
+      render: (row) => {
+        const text = (row.realName || row.username).slice(0, 1).toUpperCase();
+        return h(
+          'div',
+          {
+            class:
+              'flex h-9 w-9 items-center justify-center rounded-full bg-primary/20 text-sm font-semibold text-primary',
+          },
+          text,
+        );
+      },
+    },
+    {
+      title: '用户名',
+      key: 'username',
+      width: 140,
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => row.username,
+    },
+    {
+      title: '姓名',
+      key: 'realName',
+      width: 120,
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => row.realName || '-',
+    },
+    {
+      title: '邮箱',
+      key: 'email',
+      minWidth: 180,
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => row.email || '-',
+    },
+    {
+      title: '状态',
+      key: 'enabled',
+      width: 80,
+      align: 'center',
+      render: (row) => {
+        return h(
+          NTag,
+          {
+            size: 'small',
+            type: row.enabled ? 'success' : 'error',
+            bordered: false,
+          },
+          { default: () => (row.enabled ? '启用' : '禁用') },
+        );
+      },
+    },
+  ];
+});
+
+const authedUsersColumns = computed((): DataTableColumns<User> => {
+  // 依赖 roleUsersRefreshKey 来触发重新计算
+  void roleUsersRefreshKey.value;
+  
+  return [
+    {
+      title: '',
+      key: 'action',
+      width: 60,
+      align: 'center',
+      fixed: 'left',
+      render: (row) => {
+        const disabled = !activeRoleId.value;
+        return h(
+          NButton,
+          {
+            size: 'small',
+            dashed: true,
+            type: 'error',
+            disabled,
+            onClick: () => removeUserFromRole(row.id),
+          },
+          { default: () => '-' },
+        );
+      },
+    },
+    {
+      title: '',
+      key: 'avatar',
+      width: 56,
+      align: 'center',
+      render: (row) => {
+        const text = (row.realName || row.username).slice(0, 1).toUpperCase();
+        return h(
+          'div',
+          {
+            class:
+              'flex h-9 w-9 items-center justify-center rounded-full bg-primary/20 text-sm font-semibold text-primary',
+          },
+          text,
+        );
+      },
+    },
+    {
+      title: '用户名',
+      key: 'username',
+      width: 140,
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => row.username,
+    },
+    {
+      title: '姓名',
+      key: 'realName',
+      minWidth: 120,
+      ellipsis: {
+        tooltip: true,
+      },
+      render: (row) => row.realName || '-',
+    },
+  ];
+});
+
+async function saveRoleUsers() {
+  if (!activeRole.value || !activeRoleId.value) return;
+  
+  try {
+    // 使用原始数据进行比较
+    const currentUserIds = originalRoleUsersMap.value.get(activeRoleId.value) || [];
+    const newUserIds = selectedUserKeys.value;
+    
+    console.log('=== Save Role Users ===');
+    console.log('Current user IDs (from originalRoleUsersMap):', currentUserIds);
+    console.log('New user IDs (from selectedUserKeys):', newUserIds);
+    
+    // 计算需要添加和删除的用户
+    const toAdd = newUserIds.filter(id => !currentUserIds.includes(id));
+    const toRemove = currentUserIds.filter(id => !newUserIds.includes(id));
+    
+    console.log('To add:', toAdd);
+    console.log('To remove:', toRemove);
+    
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      console.log('No changes to save');
+      message.info('没有需要保存的更改');
+      return;
+    }
+    
+    // 先删除不需要的用户
+    if (toRemove.length > 0) {
+      console.log('Calling removeRoleUsersApi with:', toRemove);
+      await removeRoleUsersApi(activeRoleId.value, { userIds: toRemove });
+      console.log('removeRoleUsersApi success');
+    }
+    
+    // 再添加新用户
+    if (toAdd.length > 0) {
+      console.log('Calling addRoleUsersApi with:', toAdd);
+      await addRoleUsersApi(activeRoleId.value, { userIds: toAdd });
+      console.log('addRoleUsersApi success');
+    }
+    
+    // 更新原始数据缓存
+    originalRoleUsersMap.value.set(activeRoleId.value, [...newUserIds]);
+    // 更新当前数据
+    roleUsersMap.value.set(activeRoleId.value, newUserIds);
+    
+    // 强制刷新显示
+    roleUsersRefreshKey.value++;
+    
+    message.success(`已保存「${activeRole.value.name}」角色用户`);
+  } catch (error) {
+    console.error('Failed to save role users:', error);
+    // Error already handled by interceptor
+  }
+}
+
+// 检测角色用户是否有变化
+const hasRoleUsersChanges = computed(() => {
+  // 依赖 roleUsersRefreshKey 来触发重新计算
+  void roleUsersRefreshKey.value;
+  
+  if (!activeRoleId.value) return false;
+  
+  const originalUserIds = originalRoleUsersMap.value.get(activeRoleId.value) || [];
+  const currentUserIds = selectedUserKeys.value;
+  
+  // 检查长度是否相同
+  if (originalUserIds.length !== currentUserIds.length) {
+    return true;
+  }
+  
+  // 检查内容是否相同（排序后比较）
+  const sortedOriginal = [...originalUserIds].sort((a, b) => a - b);
+  const sortedCurrent = [...currentUserIds].sort((a, b) => a - b);
+  
+  return !sortedOriginal.every((id, index) => id === sortedCurrent[index]);
+});
+
+const { height: windowHeight } = useWindowSize();
+const panelHeight = computed(() => Math.max(640, windowHeight.value - 140));
+const permissionTableMaxHeight = computed(() => Math.max(360, panelHeight.value - 260));
+const usersPanelMinHeight = computed(() => Math.max(360, panelHeight.value - 220));
+</script>
+
+<template>
+  <div class="p-4" :style="{ height: `${panelHeight}px` }">
+    <div class="flex h-full gap-4">
+      <NCard
+        :bordered="false"
+        size="small"
+        class="w-[320px] flex-shrink-0 h-full"
+        content-style="height: 100%; display: flex; flex-direction: column;"
+      >
+        <div class="flex items-center gap-2">
+          <NInput
+            v-model:value="roleKeyword"
+            clearable
+            placeholder="搜索名称/编码"
+            class="flex-1"
+          />
+          <NButton type="primary" class="!h-9 !w-9" @click="openCreateRole">
+            +
+          </NButton>
+        </div>
+
+        <div class="mt-3 flex-1 min-h-0">
+          <NScrollbar class="h-full">
+            <div v-if="loading" class="flex items-center justify-center py-8 text-muted-foreground">
+              加载中...
+            </div>
+            <div v-else-if="filteredRoles.length === 0" class="flex flex-col items-center justify-center py-8 text-muted-foreground">
+              <div class="text-4xl mb-2">📋</div>
+              <div>{{ roleKeyword ? '未找到匹配的角色' : '暂无角色数据' }}</div>
+              <NButton v-if="!roleKeyword" type="primary" size="small" class="mt-3" @click="openCreateRole">
+                创建第一个角色
+              </NButton>
+            </div>
+            <div v-else class="flex flex-col gap-2">
+              <button
+                v-for="role in filteredRoles"
+                :key="role.id"
+                type="button"
+                class="group rounded-md border px-3 py-2 text-left transition"
+                :class="
+                  activeRoleId === role.id
+                    ? 'border-primary bg-primary/10'
+                    : 'border-transparent hover:bg-accent/50'
+                "
+                @click="activeRoleId = role.id"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="truncate font-medium">{{ role.name }}</span>
+                      <NBadge v-if="!role.enabled" dot type="error" />
+                    </div>
+                    <div class="text-muted-foreground mt-1 truncate text-xs">
+                      {{ role.code }}
+                    </div>
+                  </div>
+
+                  <div
+                    class="flex items-center gap-2 transition-opacity"
+                    :class="activeRoleId === role.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+                  >
+                    <NButton
+                      size="tiny"
+                      tertiary
+                      type="primary"
+                      @click.stop="openEditRole(role)"
+                    >
+                      编辑
+                    </NButton>
+                    <NButton
+                      size="tiny"
+                      tertiary
+                      type="error"
+                      @click.stop="deleteRole(role)"
+                    >
+                      删除
+                    </NButton>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </NScrollbar>
+        </div>
+      </NCard>
+
+      <NCard
+        :bordered="false"
+        size="small"
+        class="min-w-0 flex-1 h-full"
+        content-style="height: 100%; display: flex; flex-direction: column;"
+      >
+        <div class="mb-2 min-h-0 flex-1">
+          <NTabs type="line" animated class="h-full">
+            <NTabPane name="permission" tab="功能权限">
+              <div class="flex h-full flex-col">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex flex-wrap items-center gap-3">
+                    <NButton 
+                      type="primary" 
+                      :disabled="!hasPermissionChanges"
+                      @click="savePermission"
+                    >
+                      保存权限
+                    </NButton>
+                  </div>
+
+                  <div class="flex flex-wrap items-center gap-3">
+                    <NButton tertiary @click="allExpanded ? collapseAll() : expandAll()">
+                      {{ allExpanded ? '折叠' : '展开' }}
+                    </NButton>
+                    <NButton tertiary @click="refreshPermission">刷新</NButton>
+                  </div>
+                </div>
+
+                <div class="flex-1 min-h-0 rounded-md border border-border">
+                  <NDataTable
+                    :key="`permission-table-${activeRoleId}-${permissionRefreshKey}`"
+                    :columns="permissionColumns"
+                    :data="permissionTree"
+                    :row-key="(row) => row.id"
+                    :scroll-x="840"
+                    :max-height="permissionTableMaxHeight"
+                    v-model:expanded-row-keys="expandedRowKeys"
+                    :indent="24"
+                    striped
+                  />
+                </div>
+              </div>
+            </NTabPane>
+
+            <NTabPane name="users" tab="角色用户">
+              <div class="flex h-full flex-col">
+                <div class="mb-3 flex items-center justify-between">
+                  <div class="text-muted-foreground text-sm">
+                    为当前角色分配用户
+                  </div>
+                  <NButton 
+                    type="primary" 
+                    :disabled="!hasRoleUsersChanges"
+                    @click="saveRoleUsers"
+                  >
+                    保存
+                  </NButton>
+                </div>
+
+                <div
+                  class="flex-1 min-h-0 grid grid-cols-2 gap-4"
+                  :style="{ minHeight: `${usersPanelMinHeight}px` }"
+                >
+                  <div class="flex h-full min-h-0 flex-col rounded-md border border-border">
+                    <div class="p-3 border-b border-border">
+                      <div class="flex items-center gap-3">
+                        <NInput
+                          v-model:value="allUsersKeywordDraft"
+                          clearable
+                          placeholder="请输入用户名"
+                          class="flex-1"
+                          @keyup.enter="queryAllUsers"
+                        />
+                        <NButton type="primary" @click="queryAllUsers">查询</NButton>
+                        <NButton @click="resetAllUsersQuery">重置</NButton>
+                      </div>
+                    </div>
+
+                    <div class="flex-1 min-h-0">
+                      <NDataTable
+                        class="role-users-all-table"
+                        :columns="allUsersColumns"
+                        :data="allUsersPaged"
+                        :pagination="allUsersPagination"
+                        :bordered="false"
+                        :max-height="usersPanelMinHeight - 120"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="flex h-full min-h-0 flex-col rounded-md border border-border">
+                    <div class="p-3 border-b border-border">
+                      <div class="text-sm font-medium">已授权用户</div>
+                    </div>
+
+                    <div class="flex-1 min-h-0">
+                      <NDataTable
+                        class="role-users-authed-table"
+                        :columns="authedUsersColumns"
+                        :data="authedUsersPaged"
+                        :pagination="authedUsersPagination"
+                        :bordered="false"
+                        :max-height="usersPanelMinHeight - 120"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </NTabPane>
+          </NTabs>
+        </div>
+      </NCard>
+    </div>
+
+    <ApplyModal
+      v-model:show="modalOpen"
+      :mode="modalMode"
+      :initial-values="modalInitialValues"
+      :existing-codes="existingCodes"
+      :original-code="originalCode"
+      @submit="handleRoleSubmit"
+    />
+  </div>
+</template>
+
+<style scoped>
+:deep(td.perm-node-check-cell),
+:deep(td.perm-menu-cell) {
+  vertical-align: middle;
+}
+
+:deep(td.perm-node-check-cell) {
+  padding-right: 0 !important;
+}
+
+:deep(td.perm-node-check-cell .n-data-table-td__content) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+:deep(td.perm-node-check-cell .n-checkbox) {
+  transform: translateY(1px);
+}
+
+:deep(td.perm-menu-cell) {
+  padding-left: 0 !important;
+}
+
+:deep(td.perm-menu-cell .n-data-table-td__content) {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+:deep(td.perm-menu-cell .n-data-table-tree-switcher) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  min-width: 20px;
+  margin-right: 8px;
+}
+
+:deep(td.perm-menu-cell .n-data-table-tree-switcher--disabled) {
+  visibility: hidden;
+}
+
+/* 权限表格树形缩进样式 */
+:deep(.n-data-table) {
+  /* 确保树形缩进可见 */
+  .n-data-table-indent {
+    width: 24px !important;
+    min-width: 24px !important;
+    display: inline-block !important;
+  }
+  
+  /* 树形列的缩进 */
+  .n-data-table-td--tree-col {
+    .n-data-table-indent {
+      width: 24px !important;
+      min-width: 24px !important;
+    }
+  }
+  
+  /* 展开按钮样式 */
+  .n-data-table-expand-trigger {
+    margin-right: 8px;
+  }
+}
+
+:deep(td.perm-menu-cell .n-data-table-tree-indent) {
+  width: 24px !important;
+  min-width: 24px !important;
+  display: inline-block !important;
+}
+
+/* 确保缩进元素可见 */
+:deep(.n-data-table .n-data-table-tree-indent) {
+  width: 24px !important;
+  min-width: 24px !important;
+  display: inline-block !important;
+}
+
+/* 调整整体缩进 */
+:deep(.n-data-table-td--tree-col) {
+  padding-left: 8px !important;
+}
+
+/* 每一级的缩进 */
+:deep(.n-data-table-indent) {
+  width: 24px !important;
+  min-width: 24px !important;
+  display: inline-block !important;
+}
+:deep(.n-data-table .n-data-table-indent) {
+  display: inline-block !important;
+  width: 24px !important;
+  min-width: 24px !important;
+}
+:deep(td.perm-menu-cell .n-data-table-tree-switcher + *) {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+:deep(.role-users-all-table .n-data-table__pagination) {
+  padding-right: 12px;
+  padding-bottom: 12px;
+}
+
+:deep(.role-users-authed-table .n-data-table__pagination) {
+  padding-right: 12px;
+  padding-bottom: 12px;
+}
+</style>

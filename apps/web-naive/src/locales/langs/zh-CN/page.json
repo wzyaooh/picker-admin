@@ -1,0 +1,53 @@
+{
+  "auth": {
+    "login": "登录",
+    "register": "注册",
+    "codeLogin": "验证码登录",
+    "qrcodeLogin": "二维码登录",
+    "forgetPassword": "忘记密码",
+    "profile": "个人中心"
+  },
+  "dashboard": {
+    "title": "概览",
+    "analytics": "分析页",
+    "workspace": "工作台"
+  },
+  "permission": {
+    "title": "权限管理",
+    "module": "模块管理",
+    "role": "角色管理",
+    "menu": "菜单管理"
+  },
+  "organization": {
+    "title": "组织架构",
+    "overview": "组织架构总览",
+    "org": "组织管理",
+    "user": "用户管理",
+    "position": "职位管理",
+    "group": "用户组管理"
+  },
+  "client": {
+    "title": "客户端管理",
+    "module": "模块管理",
+    "menu": "菜单管理"
+  },
+  "systemTools": {
+    "title": "系统工具",
+    "dict": "字典管理",
+    "file": "文件管理",
+    "audit": "审计日志",
+    "apiKey": "API Key 管理",
+    "config": "系统配置"
+  },
+  "scheduledTask": {
+    "title": "定时任务",
+    "task": "任务管理",
+    "log": "执行日志"
+  },
+  "crawler": {
+    "title": "爬虫管理",
+    "task": "任务管理",
+    "result": "爬取结果",
+    "article": "AI 文章"
+  }
+}

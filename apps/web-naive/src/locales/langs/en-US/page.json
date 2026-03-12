@@ -1,0 +1,53 @@
+{
+  "auth": {
+    "login": "Login",
+    "register": "Register",
+    "codeLogin": "Code Login",
+    "qrcodeLogin": "Qr Code Login",
+    "forgetPassword": "Forget Password",
+    "profile": "Profile"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "analytics": "Analytics",
+    "workspace": "Workspace"
+  },
+  "permission": {
+    "title": "Permission Management",
+    "module": "Module Management",
+    "role": "Role Management",
+    "menu": "Menu Management"
+  },
+  "organization": {
+    "title": "Organization",
+    "overview": "Organization Overview",
+    "org": "Organization Management",
+    "user": "User Management",
+    "position": "Position Management",
+    "group": "User Group Management"
+  },
+  "client": {
+    "title": "Client Management",
+    "module": "Module Management",
+    "menu": "Menu Management"
+  },
+  "systemTools": {
+    "title": "System Tools",
+    "dict": "Dictionary",
+    "file": "File Management",
+    "audit": "Audit Log",
+    "apiKey": "API Key Management",
+    "config": "System Config"
+  },
+  "scheduledTask": {
+    "title": "Scheduled Tasks",
+    "task": "Task Management",
+    "log": "Execution Log"
+  },
+  "crawler": {
+    "title": "Crawler",
+    "task": "Task Management",
+    "result": "Crawl Results",
+    "article": "AI Articles"
+  }
+}
