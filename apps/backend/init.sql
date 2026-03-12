@@ -925,8 +925,7 @@ INSERT INTO `security_config` (`configGroup`, `configData`, `description`) VALUE
 -- 密码: 123456 (BCrypt加密)
 -- ----------------------------
 INSERT INTO `user` (`id`, `username`, `password`, `enable`, `createTime`, `updateTime`, `departmentId`, `positionId`, `passwordUpdatedAt`, `mustChangePassword`, `lastLoginAt`, `lastLoginIp`) VALUES
-(1, 'admin', '$2a$10$FsAafxTTVVGXfIkJqvaiV.1vPfq4V9HW298McPldJgO829PR52a56', 1, '2023-11-18 08:18:59', '2023-11-18 08:18:59', NULL, NULL, NULL, 0, NULL, NULL),
-(2, 'weize1130', '$2a$10$2KUGf4Wmp83PYnRlw0kNfOs1gr3rHI8A8de64.EpXJiPqL9gHCKDa', 1, '2026-01-31 07:15:07', '2026-01-31 07:15:07', NULL, NULL, NULL, 0, NULL, NULL);
+(1, 'admin', '$2a$10$8jrDYjdnDgffluWkuwQ8DeftntnKtz1N4QdhDBgmJzxPlTt7BbEtK', 1, '2023-11-18 08:18:59', '2023-11-18 08:18:59', NULL, NULL, NULL, 0, NULL, NULL),
 
 -- ----------------------------
 -- Records of user_group
