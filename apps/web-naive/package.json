@@ -42,7 +42,7 @@
     "@vben/utils": "workspace:*",
     "@vueuse/core": "catalog:",
     "marked": "^17.0.3",
-    "mermaid": "^11.12.3",
+    "mermaid": "^11.15.0",
     "naive-ui": "catalog:",
     "pinia": "catalog:",
     "vue": "catalog:",
